@@ -111,6 +111,60 @@ function Get-NextObjectId {
 .EXAMPLE
    Another example of how to use this cmdlet
 #>
+function Set-CATemplateAcl {
+    [CmdletBinding()]
+    Param
+    (
+        <#
+        # Param1 help description
+        [Parameter(Mandatory=$true,
+                   ValueFromPipelineByPropertyName=$true,
+                   Position=0)]
+        $Param1,
+        #>
+        [System.DirectoryServices.DirectoryEntry]
+        $NewTemplate,
+        [string]
+        $UserOrGroupName,
+        [string]
+        $adRights = "ReadProperty, ExtendedRight, GenericExecute",
+        [string]
+        $type = "Allow"
+
+
+    )
+
+    Begin {
+        Write-Output "Adding $UserOrGroupName to certificate template ACL..."
+        Write-Output "adRights: $adRights..."
+        Write-Output "type: $type..."
+    }
+    Process {
+        # Add Domain Computers to the Template ACL and permission
+        $NTAccountPrincipal = New-Object System.Security.Principal.NTAccount($UserOrGroupName)
+        $identity = $NTAccountPrincipal.Translate([System.Security.Principal.SecurityIdentifier])
+        #$adRights = "ReadProperty, ExtendedRight, GenericExecute"
+        #$type = "Allow"
+
+        $ACE = New-Object System.DirectoryServices.ActiveDirectoryAccessRule($identity, $adRights, $type)
+        $NewTemplate.psbase.ObjectSecurity.SetAccessRule($ACE)
+        $NewTemplate.psbase.commitchanges()
+    }
+    End {
+        Write-Output "Completed adding $UserOrGroupName to certificate template ACL..."
+    }
+}
+
+<#
+.Synopsis
+   Short description
+.DESCRIPTION
+   Long description
+.EXAMPLE
+   Example of how to use this cmdlet
+.EXAMPLE
+   Another example of how to use this cmdlet
+#>
 function New-CATemplate {
     [CmdletBinding()]
     [Alias()]
@@ -141,52 +195,56 @@ function New-CATemplate {
 $ConfigContext = ([ADSI]"LDAP://RootDSE").ConfigurationNamingContext
 $ADSI = [ADSI]"LDAP://CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext"
 
-$NewTempl = $ADSI.Create("pKICertificateTemplate", "CN=$($WorkstationTmplDistName)")
-$NewTempl.put("distinguishedName", "CN=$($WorkstationTmplDistName),CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext")
+$NewTemplate = $ADSI.Create("pKICertificateTemplate", "CN=$($WorkstationTmplDistName)")
+$NewTemplate.put("distinguishedName", "CN=$($WorkstationTmplDistName),CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext")
 # and put other atributes that you need
 
-$NewTempl.put("flags", "131680")
-$NewTempl.put("displayName", "$($WorkstationTmplName)")
-$NewTempl.put("revision", "100")
-$NewTempl.put("pKIDefaultKeySpec", "1")
-$NewTempl.SetInfo()
+$NewTemplate.put("flags", "131680")
+$NewTemplate.put("displayName", "$($WorkstationTmplName)")
+$NewTemplate.put("revision", "100")
+$NewTemplate.put("pKIDefaultKeySpec", "1")
+$NewTemplate.SetInfo()
 
-$NewTempl.put("pKIMaxIssuingDepth", "0")
-$NewTempl.put("pKICriticalExtensions", "2.5.29.15")
-$NewTempl.put("pKIExtendedKeyUsage", "1.3.6.1.5.5.7.3.2") # from ConfigMgrClientCertificate
-$NewTempl.put("pKIDefaultCSPs", "1,Microsoft RSA SChannel Cryptographic Provider")
-$NewTempl.put("msPKI-RA-Signature", "0")
-$NewTempl.put("msPKI-Enrollment-Flag", "32")
-$NewTempl.put("msPKI-Private-Key-Flag", "16842752")
-$NewTempl.put("msPKI-Certificate-Name-Flag", "134217728")
-$NewTempl.put("msPKI-Minimal-Key-Size", "2048")
-$NewTempl.put("msPKI-Template-Schema-Version", "2")
-$NewTempl.put("msPKI-Template-Minor-Revision", "2")
-$NewTempl.put("msPKI-Cert-Template-OID", "$(Get-NextObjectId)")
-$NewTempl.put("msPKI-Certificate-Application-Policy", "1.3.6.1.5.5.7.3.2")
-$NewTempl.SetInfo()
+$NewTemplate.put("pKIMaxIssuingDepth", "0")
+$NewTemplate.put("pKICriticalExtensions", "2.5.29.15")
+$NewTemplate.put("pKIExtendedKeyUsage", "1.3.6.1.5.5.7.3.2") # from ConfigMgrClientCertificate
+$NewTemplate.put("pKIDefaultCSPs", "1,Microsoft RSA SChannel Cryptographic Provider")
+$NewTemplate.put("msPKI-RA-Signature", "0")
+$NewTemplate.put("msPKI-Enrollment-Flag", "32")
+$NewTemplate.put("msPKI-Private-Key-Flag", "16842752")
+$NewTemplate.put("msPKI-Certificate-Name-Flag", "134217728")
+$NewTemplate.put("msPKI-Minimal-Key-Size", "2048")
+$NewTemplate.put("msPKI-Template-Schema-Version", "2")
+$NewTemplate.put("msPKI-Template-Minor-Revision", "2")
+$NewTemplate.put("msPKI-Cert-Template-OID", "$(Get-NextObjectId)")
+$NewTemplate.put("msPKI-Certificate-Application-Policy", "1.3.6.1.5.5.7.3.2")
+$NewTemplate.SetInfo()
 
 # Get Workstation Authentication CA Template object
 $WATempl = $ADSI.psbase.children | Where-Object {$_.displayName -match "Workstation Authentication"}
 
 # Set pKIKeyUsage, pKIExpirationPeriod, pKIOverlapPeriod to the value in the Workstation Authentication template
 # These values I believe take a binary/array value and this was the easy way to make it work.
-$NewTempl.pKIKeyUsage = $WATempl.pKIKeyUsage
-$NewTempl.pKIExpirationPeriod = $WATempl.pKIExpirationPeriod
-$NewTempl.pKIOverlapPeriod = $WATempl.pKIOverlapPeriod
-$NewTempl.SetInfo()
+$NewTemplate.pKIKeyUsage = $WATempl.pKIKeyUsage
+$NewTemplate.pKIExpirationPeriod = $WATempl.pKIExpirationPeriod
+$NewTemplate.pKIOverlapPeriod = $WATempl.pKIOverlapPeriod
+$NewTemplate.SetInfo()
 
-$NewTempl | Select-Object *
+$NewTemplate | Select-Object *
 
+<# MOVING TO Set-CATemplateAcl
 # Add Domain Computers to the Template ACL and permission
-$AdObj = New-Object System.Security.Principal.NTAccount("Domain Computers")
-$identity = $AdObj.Translate([System.Security.Principal.SecurityIdentifier])
+$NTAccountPrincipal = New-Object System.Security.Principal.NTAccount("Domain Computers")
+$identity = $NTAccountPrincipal.Translate([System.Security.Principal.SecurityIdentifier])
 $adRights = "ReadProperty, ExtendedRight, GenericExecute"
 $type = "Allow"
 
 $ACE = New-Object System.DirectoryServices.ActiveDirectoryAccessRule($identity, $adRights, $type)
-$NewTempl.psbase.ObjectSecurity.SetAccessRule($ACE)
-$NewTempl.psbase.commitchanges()
+$NewTemplate.psbase.ObjectSecurity.SetAccessRule($ACE)
+$NewTemplate.psbase.commitchanges()
+#>
+
+Set-CATemplateAcl -NewTemplate $NewTemplate
 
 # Get all the certificate templates (Issued&NonIssued from Active Directory)
 $templates = $adsi | Select-Object -ExpandProperty Children
