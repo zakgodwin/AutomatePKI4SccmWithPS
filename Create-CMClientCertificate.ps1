@@ -37,14 +37,18 @@
   <Example goes here. Repeat this attribute for more than one example>
 #>
 
-# Variables
-$WorkstationTmplName = 'ConfigMgr Client Certificate'
-$WorkstationTmplDistName = 'ConfigMgrClientCertificate'
 
-# Check if the cert already exists and exit if it does
-if ([bool](Get-CATemplate | Where-Object {$_.Name -match $WorkstationTmplDistName}) -eq 'True') {
-    Write-Output "$WorkstationTmplName already exists existing..."
-    Exit(0)
+
+## NEED TO ORGANIZE CODE ONCE FUNCTIONING AGAIN
+## Thoughts are to add an initialization function that will load in the
+## template configuration and check if the cert exists or not.
+
+function Initialize-ScriptSettings ($param1, $param2) {
+
+}
+
+function Test-CATemplateExists ($param1, $param2) {
+
 }
 
 <#
@@ -67,7 +71,7 @@ function Get-NextObjectId {
     )
 
     Begin {
-        Write-Output "Finding next available OID..."
+        Write-Host "Finding next available OID..."
     }
     Process {
         $szOID_ENTERPRISE_OID_ROOT = '1.3.6.1.4.1.311.21.8.'
@@ -94,12 +98,49 @@ function Get-NextObjectId {
         $newIndexPosition = $lastUsedOid.LastIndexOf('.') + 1
         $newIndexValue = [int]$lastUsedOid.Substring($newIndexPosition) + 1
         $newOID = $lastUsedOid.Substring(0, $newIndexPosition) + $newIndexValue
-        Write-Output "Last used ObjectID: $($lastUsedOid)"
-        Write-Output "Setting msPKI-Cert-Template-OID $newOID"
+        Write-Host "Last used ObjectID: $($lastUsedOid)"
+        Write-Host "Setting msPKI-Cert-Template-OID $newOID"
 
         return $newOID
     }
 }
+
+# Variables
+$ADSITemplate = @()
+$TemplateName = 'ConfigMgr Client Certificate'
+$TemplateDistinguishedName = 'ConfigMgrClientCertificate'
+
+# CA Template Configurations
+# DO NOT MODIFY
+$ConfigMgrClientCertificateTemplate = @{
+    'TemplateName'                      = 'ConfigMgr Client Certificate';
+    'TemplateDistinguishedName'         = 'ConfigMgrClientCertificate';
+    'ExistingTemplateName'              = 'Workstation Authentication';
+    'flags'                             = '131680';
+    'displayName'                       = 'ConfigMgr Client Certificate';
+    'revision'                          = '100';
+    'pKIDefaultKeySpec'                 = '1';
+    'pKIMaxIssuingDepth'                = '0';
+    'pKICriticalExtensions'             = '2.5.29.15';
+    'pKIExtendedKeyUsage'               = '1.3.6.1.5.5.7.3.2'; # from ConfigMgrClientCertificate
+    'pKIDefaultCSPs'                    = '1,Microsoft RSA SChannel Cryptographic Provider';
+    'msPKIRASignature'                  = '0';
+    'msPKIEnrollmentFlag'               = '32';
+    'msPKIPrivateKeyFlag'               = '16842752';
+    'msPKICertificateNameFlag'          = '134217728';
+    'msPKIMinimalKeySize'               = '2048';
+    'msPKITemplateSchemaVersion'        = '2';
+    'msPKITemplateMinorRevision'        = '2';
+    'msPKICertTemplateOID'              = "$(Get-NextObjectId)";
+    'msPKICertificateApplicationPolicy' = '1.3.6.1.5.5.7.3.2'
+}
+
+# Check if the cert already exists and exit if it does
+if ([bool](Get-CATemplate | Where-Object {$_.Name -match $ConfigMgrClientCertificateTemplate.TemplateDistinguishedName}) -eq 'True') {
+    Write-Output "$TemplateName already exists existing..."
+    Exit(0)
+}
+
 
 <#
 .Synopsis
@@ -115,23 +156,12 @@ function Set-CATemplateAcl {
     [CmdletBinding()]
     Param
     (
-        <#
-        # Param1 help description
-        [Parameter(Mandatory=$true,
-                   ValueFromPipelineByPropertyName=$true,
-                   Position=0)]
-        $Param1,
-        #>
-        [System.DirectoryServices.DirectoryEntry]
-        $NewTemplate,
         [string]
         $UserOrGroupName,
-        [string]
+        [System.DirectoryServices.ActiveDirectoryRights]
         $adRights = "ReadProperty, ExtendedRight, GenericExecute",
-        [string]
+        [System.Security.AccessControl.AccessControlType]
         $type = "Allow"
-
-
     )
 
     Begin {
@@ -143,12 +173,10 @@ function Set-CATemplateAcl {
         # Add Domain Computers to the Template ACL and permission
         $NTAccountPrincipal = New-Object System.Security.Principal.NTAccount($UserOrGroupName)
         $identity = $NTAccountPrincipal.Translate([System.Security.Principal.SecurityIdentifier])
-        #$adRights = "ReadProperty, ExtendedRight, GenericExecute"
-        #$type = "Allow"
 
         $ACE = New-Object System.DirectoryServices.ActiveDirectoryAccessRule($identity, $adRights, $type)
-        $NewTemplate.psbase.ObjectSecurity.SetAccessRule($ACE)
-        $NewTemplate.psbase.commitchanges()
+        $ADSITemplate.psbase.ObjectSecurity.SetAccessRule($ACE)
+        $ADSITemplate.psbase.CommitChanges()
     }
     End {
         Write-Output "Completed adding $UserOrGroupName to certificate template ACL..."
@@ -171,13 +199,13 @@ function New-CATemplate {
     [OutputType([int])]
     Param
     (
-        <#
-        # Param1 help description
-        [Parameter(Mandatory=$true,
-                   ValueFromPipelineByPropertyName=$true,
-                   Position=0)]
-        $Param1,
 
+        # TemplateConfiguration contains all the template attribrutes used to create the template
+        [Parameter(Mandatory = $true,
+            ValueFromPipelineByPropertyName = $true,
+            Position = 0)]
+        $TemplateConfiguration
+        <#
         # Param2 help description
         [int]
         $Param2
@@ -185,72 +213,65 @@ function New-CATemplate {
     )
 
     Begin {
+        Write-Host "Begin New-CATemplate $TemplateConfiguration.displayName CA Template..."
     }
     Process {
+        # Get the current domain and create an ADSI object instance
+        $ConfigContext = ([ADSI]"LDAP://RootDSE").ConfigurationNamingContext
+        $ADSI = [ADSI]"LDAP://CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext"
+
+        $script:ADSITemplate = $ADSI.Create("pKICertificateTemplate", "CN=$($TemplateConfiguration.TemplateDistinguishedName)")
+        $ADSITemplate.put("distinguishedName", "CN=$($TemplateConfiguration.TemplateDistinguishedName),CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext")
+        # and put other atributes that you need
+
+        $ADSITemplate.put("flags", $TemplateConfiguration.flags)
+        $ADSITemplate.put("displayName", $TemplateConfiguration.displayName)
+        $ADSITemplate.put("revision", $TemplateConfiguration.revision)
+        $ADSITemplate.put("pKIDefaultKeySpec", $TemplateConfiguration.pKIDefaultKeySpec)
+        $ADSITemplate.SetInfo()
+
+        $ADSITemplate.put("pKIMaxIssuingDepth", $TemplateConfiguration.pKIMaxIssuingDepth)
+        $ADSITemplate.put("pKICriticalExtensions", $TemplateConfiguration.pKICriticalExtensions)
+        $ADSITemplate.put("pKIExtendedKeyUsage", $TemplateConfiguration.pKIExtendedKeyUsage)
+        $ADSITemplate.put("pKIDefaultCSPs", $TemplateConfiguration.pKIDefaultCSPs)
+        $ADSITemplate.put("msPKI-RA-Signature", $TemplateConfiguration.msPKIRASignature)
+        $ADSITemplate.put("msPKI-Enrollment-Flag", $TemplateConfiguration.msPKIEnrollmentFlag)
+        $ADSITemplate.put("msPKI-Private-Key-Flag", $TemplateConfiguration.msPKIPrivateKeyFlag)
+        $ADSITemplate.put("msPKI-Certificate-Name-Flag", $TemplateConfiguration.msPKICertificateNameFlag)
+        $ADSITemplate.put("msPKI-Minimal-Key-Size", $TemplateConfiguration.msPKIMinimalKeySize)
+        $ADSITemplate.put("msPKI-Template-Schema-Version", $TemplateConfiguration.msPKITemplateSchemaVersion)
+        $ADSITemplate.put("msPKI-Template-Minor-Revision", $TemplateConfiguration.msPKITemplateMinorRevision)
+        $ADSITemplate.put("msPKI-Cert-Template-OID", "$(Get-NextObjectId)")
+        $ADSITemplate.put("msPKI-Certificate-Application-Policy", $TemplateConfiguration.msPKICertificateApplicationPolicy)
+        $ADSITemplate.SetInfo()
+
+        # Get Workstation Authentication CA Template object
+        $WATempl = $ADSI.psbase.children | Where-Object {$_.displayName -match $TemplateConfiguration.ExistingTemplateName}
+
+        # Set pKIKeyUsage, pKIExpirationPeriod, pKIOverlapPeriod to the value in the Workstation Authentication template
+        # These values I believe take a binary/array value and this was the easy way to make it work.
+        $ADSITemplate.pKIKeyUsage = $WATempl.pKIKeyUsage
+        $ADSITemplate.pKIExpirationPeriod = $WATempl.pKIExpirationPeriod
+        $ADSITemplate.pKIOverlapPeriod = $WATempl.pKIOverlapPeriod
+        $ADSITemplate.SetInfo()
+
+        #$ADSITemplate | Select-Object *
     }
     End {
+        Write-Host "End New-CATemplate $TemplateConfiguration.displayName CA Template..."
     }
 }
 
-$ConfigContext = ([ADSI]"LDAP://RootDSE").ConfigurationNamingContext
-$ADSI = [ADSI]"LDAP://CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext"
 
-$NewTemplate = $ADSI.Create("pKICertificateTemplate", "CN=$($WorkstationTmplDistName)")
-$NewTemplate.put("distinguishedName", "CN=$($WorkstationTmplDistName),CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext")
-# and put other atributes that you need
+New-CATemplate -TemplateConfiguration $ConfigMgrClientCertificateTemplate
 
-$NewTemplate.put("flags", "131680")
-$NewTemplate.put("displayName", "$($WorkstationTmplName)")
-$NewTemplate.put("revision", "100")
-$NewTemplate.put("pKIDefaultKeySpec", "1")
-$NewTemplate.SetInfo()
-
-$NewTemplate.put("pKIMaxIssuingDepth", "0")
-$NewTemplate.put("pKICriticalExtensions", "2.5.29.15")
-$NewTemplate.put("pKIExtendedKeyUsage", "1.3.6.1.5.5.7.3.2") # from ConfigMgrClientCertificate
-$NewTemplate.put("pKIDefaultCSPs", "1,Microsoft RSA SChannel Cryptographic Provider")
-$NewTemplate.put("msPKI-RA-Signature", "0")
-$NewTemplate.put("msPKI-Enrollment-Flag", "32")
-$NewTemplate.put("msPKI-Private-Key-Flag", "16842752")
-$NewTemplate.put("msPKI-Certificate-Name-Flag", "134217728")
-$NewTemplate.put("msPKI-Minimal-Key-Size", "2048")
-$NewTemplate.put("msPKI-Template-Schema-Version", "2")
-$NewTemplate.put("msPKI-Template-Minor-Revision", "2")
-$NewTemplate.put("msPKI-Cert-Template-OID", "$(Get-NextObjectId)")
-$NewTemplate.put("msPKI-Certificate-Application-Policy", "1.3.6.1.5.5.7.3.2")
-$NewTemplate.SetInfo()
-
-# Get Workstation Authentication CA Template object
-$WATempl = $ADSI.psbase.children | Where-Object {$_.displayName -match "Workstation Authentication"}
-
-# Set pKIKeyUsage, pKIExpirationPeriod, pKIOverlapPeriod to the value in the Workstation Authentication template
-# These values I believe take a binary/array value and this was the easy way to make it work.
-$NewTemplate.pKIKeyUsage = $WATempl.pKIKeyUsage
-$NewTemplate.pKIExpirationPeriod = $WATempl.pKIExpirationPeriod
-$NewTemplate.pKIOverlapPeriod = $WATempl.pKIOverlapPeriod
-$NewTemplate.SetInfo()
-
-$NewTemplate | Select-Object *
-
-<# MOVING TO Set-CATemplateAcl
-# Add Domain Computers to the Template ACL and permission
-$NTAccountPrincipal = New-Object System.Security.Principal.NTAccount("Domain Computers")
-$identity = $NTAccountPrincipal.Translate([System.Security.Principal.SecurityIdentifier])
-$adRights = "ReadProperty, ExtendedRight, GenericExecute"
-$type = "Allow"
-
-$ACE = New-Object System.DirectoryServices.ActiveDirectoryAccessRule($identity, $adRights, $type)
-$NewTemplate.psbase.ObjectSecurity.SetAccessRule($ACE)
-$NewTemplate.psbase.commitchanges()
-#>
-
-Set-CATemplateAcl -NewTemplate $NewTemplate
+Set-CATemplateAcl -UserOrGroupName 'CORP\Domain Computers'
 
 # Get all the certificate templates (Issued&NonIssued from Active Directory)
 $templates = $adsi | Select-Object -ExpandProperty Children
-if ([bool]($templates.distinguishedName -match "CN=$($WorkstationTmplDistName),CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext") -eq 'True') {
+if ([bool]($templates.distinguishedName -match "CN=$($TemplateDistinguishedName),CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext") -eq 'True') {
     # Attempt to issue the Certificate Template
-    Add-CATemplate -Name $WorkstationTmplDistName -Force -ErrorAction SilentlyContinue #-Verbose
+    Add-CATemplate -Name $TemplateDistinguishedName -Force -ErrorAction SilentlyContinue #-Verbose
 
     # Stop and start the certificate services to speed up issuance
     Write-Output "Stoping CertSvc service..."
@@ -272,11 +293,11 @@ $Stoploop = $false
 do {
     $templates = $adsi | Select-Object -ExpandProperty Children
     try {
-        if ([bool](Get-CATemplate | Where-Object {$_.Name -match $WorkstationTmplDistName}) -eq 'True') {
+        if ([bool](Get-CATemplate | Where-Object {$_.Name -match $TemplateDistinguishedName}) -eq 'True') {
             Write-Host "Template Publish Successfully-"
             $Stoploop = $true
         }
-        else {Add-CATemplate -Name $($WorkstationTmplDistName) -Force -Verbose}
+        else {Add-CATemplate -Name $($TemplateDistinguishedName) -Force -Verbose}
     }
     <# catch [EntryAlreadyExists]
     {
